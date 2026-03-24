@@ -104,12 +104,7 @@ public:
             }
         }
 
-        // All solve times equal or one has more solved problems
-        if (solveTimes.size() != other.solveTimes.size()) {
-            return solveTimes.size() > other.solveTimes.size();
-        }
-
-        // All equal, compare by name
+        // All solve times equal, compare by name
         return name < other.name;
     }
 };
