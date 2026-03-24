@@ -281,8 +281,11 @@ public:
         // Get team's ranking
         if (!hasFlushed) {
             // Before first flush, ranking is based on lexicographic order
+            // Create sorted list of team names
+            vector<string> sortedNames = teamNames;
+            sort(sortedNames.begin(), sortedNames.end());
             int rank = 1;
-            for (const auto& name : teamNames) {
+            for (const auto& name : sortedNames) {
                 if (name == teamName) {
                     cout << teamName << " NOW AT RANKING " << rank << "\n";
                     return;
