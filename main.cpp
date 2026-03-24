@@ -6,6 +6,7 @@
 #include <sstream>
 #include <cstdio>
 #include <cstring>
+#include <set>
 
 using namespace std;
 
@@ -96,14 +97,19 @@ public:
             return penaltyTime < other.penaltyTime;
         }
 
-        // Compare solve times
+        // Compare solve times from largest to smallest
         for (size_t i = 0; i < min(solveTimes.size(), other.solveTimes.size()); i++) {
             if (solveTimes[i] != other.solveTimes[i]) {
                 return solveTimes[i] < other.solveTimes[i];
             }
         }
 
-        // All solve times equal, compare by name
+        // All solve times equal or one has more solved problems
+        if (solveTimes.size() != other.solveTimes.size()) {
+            return solveTimes.size() > other.solveTimes.size();
+        }
+
+        // All equal, compare by name
         return name < other.name;
     }
 };
@@ -122,6 +128,7 @@ private:
     bool isFrozen;
     int durationTime;
     int problemCount;
+    bool hasFlushed; // Whether scoreboard has been flushed at least once
 
     map<string, Team*> teams;
     vector<string> teamNames; // for maintaining insertion order
@@ -130,11 +137,12 @@ private:
     // Problem name to index mapping (A=0, B=1, ...)
     map<char, int> problemIndex;
 
-    // For freeze/unfreeze
-    vector<pair<string, char>> frozenProblems; // team name, problem
+    // For ranking
+    vector<string> rankedTeams; // teams in ranked order
 
 public:
-    ICPCSystem() : competitionStarted(false), isFrozen(false), durationTime(0), problemCount(0) {}
+    ICPCSystem() : competitionStarted(false), isFrozen(false),
+                   durationTime(0), problemCount(0), hasFlushed(false) {}
 
     ~ICPCSystem() {
         for (auto& p : teams) {
@@ -195,8 +203,8 @@ public:
         // Record submission
         submissions.push_back({teamName, problemName, status, time});
 
-        if (isFrozen && !team->isFrozen[probIndex] && team->firstAcTime[probIndex] == 0) {
-            // Problem is frozen for this team
+        if (isFrozen && team->firstAcTime[probIndex] == 0) {
+            // Problem is frozen for this team (unsolved before freeze)
             team->frozenSubmissions[probIndex]++;
             team->isFrozen[probIndex] = true;
         } else {
@@ -214,6 +222,9 @@ public:
 
     void flush() {
         cout << "[Info]Flush scoreboard.\n";
+        updateRankings();
+        printScoreboard();
+        hasFlushed = true;
     }
 
     void freeze() {
@@ -223,19 +234,6 @@ public:
         }
 
         isFrozen = true;
-
-        // Record all problems that become frozen
-        for (auto& p : teams) {
-            Team* team = p.second;
-            for (int i = 0; i < problemCount; i++) {
-                if (team->frozenSubmissions[i] > 0 ||
-                    (team->totalSubmissions[i] > 0 && team->firstAcTime[i] == 0)) {
-                    team->isFrozen[i] = true;
-                    frozenProblems.push_back({p.first, 'A' + i});
-                }
-            }
-        }
-
         cout << "[Info]Freeze scoreboard.\n";
     }
 
@@ -247,16 +245,19 @@ public:
 
         cout << "[Info]Scroll scoreboard.\n";
 
-        // TODO: Implement proper scroll logic
+        // First flush to show current scoreboard
+        updateRankings();
+        printScoreboard();
+
+        // TODO: Implement proper scroll logic with unfreezing
         // For now, just unfreeze everything
         for (auto& p : teams) {
             Team* team = p.second;
             for (int i = 0; i < problemCount; i++) {
                 if (team->isFrozen[i]) {
                     // Apply frozen submissions
+                    // For now, assume no AC in frozen submissions
                     team->totalSubmissions[i] += team->frozenSubmissions[i];
-                    // Check if any submission was AC
-                    // For simplicity, assume no AC in frozen submissions for now
                     team->frozenSubmissions[i] = 0;
                     team->isFrozen[i] = false;
                 }
@@ -264,10 +265,10 @@ public:
             team->updateStats();
         }
 
-        frozenProblems.clear();
         isFrozen = false;
 
-        // Print final scoreboard
+        // Update rankings and print final scoreboard
+        updateRankings();
         printScoreboard();
     }
 
@@ -282,8 +283,26 @@ public:
             cout << "[Warning]Scoreboard is frozen. The ranking may be inaccurate until it were scrolled.\n";
         }
 
-        // For now, just return rank 1
-        cout << teamName << " NOW AT RANKING 1\n";
+        // Get team's ranking
+        if (!hasFlushed) {
+            // Before first flush, ranking is based on lexicographic order
+            int rank = 1;
+            for (const auto& name : teamNames) {
+                if (name == teamName) {
+                    cout << teamName << " NOW AT RANKING " << rank << "\n";
+                    return;
+                }
+                rank++;
+            }
+        } else {
+            // Find team in ranked list
+            for (size_t i = 0; i < rankedTeams.size(); i++) {
+                if (rankedTeams[i] == teamName) {
+                    cout << teamName << " NOW AT RANKING " << (i + 1) << "\n";
+                    return;
+                }
+            }
+        }
     }
 
     void querySubmission(const string& teamName, const string& problemName,
@@ -295,33 +314,51 @@ public:
 
         cout << "[Info]Complete query submission.\n";
 
-        // Search for matching submission
-        Submission* lastMatch = nullptr;
-        for (auto& sub : submissions) {
+        // Search for matching submission (from end to beginning)
+        for (int i = submissions.size() - 1; i >= 0; i--) {
+            const Submission& sub = submissions[i];
             if (sub.teamName == teamName) {
                 if ((problemName == "ALL" || sub.problemName == problemName) &&
                     (statusStr == "ALL" || statusToString(sub.status) == statusStr)) {
-                    lastMatch = &sub;
+                    cout << sub.teamName << " " << sub.problemName << " "
+                         << statusToString(sub.status) << " " << sub.time << "\n";
+                    return;
                 }
             }
         }
 
-        if (lastMatch == nullptr) {
-            cout << "Cannot find any submission.\n";
-        } else {
-            cout << lastMatch->teamName << " " << lastMatch->problemName << " "
-                 << statusToString(lastMatch->status) << " " << lastMatch->time << "\n";
-        }
+        cout << "Cannot find any submission.\n";
     }
 
     void endCompetition() {
         cout << "[Info]Competition ends.\n";
     }
 
+private:
+    void updateRankings() {
+        // Create vector of team pointers
+        vector<Team*> teamList;
+        for (auto& p : teams) {
+            teamList.push_back(p.second);
+        }
+
+        // Sort teams according to ranking rules
+        sort(teamList.begin(), teamList.end(), [](Team* a, Team* b) {
+            return *a < *b;
+        });
+
+        // Update rankedTeams list
+        rankedTeams.clear();
+        for (auto team : teamList) {
+            rankedTeams.push_back(team->name);
+        }
+    }
+
     void printScoreboard() {
-        // Simple scoreboard printing
-        for (size_t i = 0; i < teamNames.size(); i++) {
-            Team* team = teams[teamNames[i]];
+        updateRankings(); // Ensure rankings are up to date
+
+        for (size_t i = 0; i < rankedTeams.size(); i++) {
+            Team* team = teams[rankedTeams[i]];
             cout << team->name << " " << (i + 1) << " " << team->solvedCount
                  << " " << team->penaltyTime;
 
